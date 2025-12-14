@@ -150,7 +150,8 @@ jobs:
           cd YoutubeExtensions
           git sparse-checkout set --no-cone OpenYoutubeSafariExtension.appex
           git checkout
-          mv *.appex ${{ github.workspace }}
+          # copy instead of move so source remains and we don't remove other appex by accident
+          cp -R OpenYoutubeSafariExtension.appex ${{ github.workspace }}/ || true
 
       - name: Clone YouTubeHeader
         if: ${{ inputs.enable_youpip || inputs.enable_ytuhd || inputs.enable_yq || inputs.enable_ryd || inputs.enable_demc }}
@@ -293,16 +294,44 @@ jobs:
         env:
           THEOS: ${{ github.workspace }}/theos
 
+      # --- NEW STEP: extract existing .appex from original IPA so we preserve them ---
+      - name: Extract existing .appex from IPA
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/original_appex tmp_unzip
+          # unzip PlugIns directories from payload; tolerate if none exist
+          unzip -q youtube.ipa 'Payload/*/*.app/PlugIns/*' -d tmp_unzip || true
+          # find .appex directories and copy them into original_appex
+          find tmp_unzip -type d -name '*.appex' -print0 | xargs -0 -I{} cp -R {} $GITHUB_WORKSPACE/original_appex/ || true
+          ls -la $GITHUB_WORKSPACE/original_appex || true
+
+      - name: Prepare appex for injection
+        run: |
+          # copy original appex into workspace root without overwriting existing files
+          cp -nR original_appex/*.appex . 2>/dev/null || true
+          # ensure the cloned OpenYoutubeSafariExtension.appex is present (if it was cloned)
+          cp -nR YoutubeExtensions/OpenYoutubeSafariExtension.appex . 2>/dev/null || true
+          ls -la *.appex || true
+
       - name: Inject tweaks into IPA
         run: |
-          tweaks="ytplus.deb OpenYoutubeSafariExtension.appex"
-
+          # Build a tweaks list including all .deb and .appex present in workspace
+          tweaks=""
+          # always include the main downloaded ytplus deb if present
+          if [ -f "ytplus.deb" ]; then tweaks="$tweaks ytplus.deb"; fi
+          # include any generated/compiled debs
           for f in *.deb; do
-            if [ -f "$f" ]; then
+            if [ -f "$f" ] && [ "$f" != "ytplus.deb" ]; then
               tweaks="$tweaks $f"
             fi
           done
-
+          # include all .appex (directories) copied from original IPA or cloned repos
+          for a in *.appex; do
+            if [ -d "$a" ] || [ -f "$a" ]; then
+              tweaks="$tweaks $a"
+            fi
+          done
+          echo "Will inject: $tweaks"
+          # run cyan to rebuild/modify IPA; pass all found tweaks so original PlugIns are preserved
           cyan -i youtube.ipa -o YouTubePlus_${{ inputs.tweak_version }}.ipa -uwef $tweaks -n "${{ inputs.display_name }}" -b ${{ inputs.bundle_id }}
 
       - name: Upload to GitHub Releases
