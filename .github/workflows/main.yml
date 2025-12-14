@@ -150,8 +150,7 @@ jobs:
           cd YoutubeExtensions
           git sparse-checkout set --no-cone OpenYoutubeSafariExtension.appex
           git checkout
-          # copy instead of move so source remains and we don't remove other appex by accident
-          cp -R OpenYoutubeSafariExtension.appex ${{ github.workspace }}/ || true
+          mv *.appex ${{ github.workspace }}
 
       - name: Clone YouTubeHeader
         if: ${{ inputs.enable_youpip || inputs.enable_ytuhd || inputs.enable_yq || inputs.enable_ryd || inputs.enable_demc }}
@@ -294,62 +293,17 @@ jobs:
         env:
           THEOS: ${{ github.workspace }}/theos
 
-      # PlugIns
-      - name: Unpack original IPA and list contents (debug)
+      - name: Inject tweaks into IPA
         run: |
-          rm -rf ipa_unpacked youtube_merged.ipa
-          mkdir -p ipa_unpacked
-          unzip -q youtube.ipa -d ipa_unpacked
-          echo "=== Payload tree ==="
-          find ipa_unpacked/Payload -maxdepth 4 -print || true
+          tweaks="ytplus.deb OpenYoutubeSafariExtension.appex"
 
-      - name: Merge original .appex and prepared .appex into the app's PlugIns
-        run: |
-          # 找到第一个 .app（一般是唯一一个）
-          app_dir=$(find ipa_unpacked/Payload -maxdepth 2 -type d -name '*.app' -print -quit)
-          if [ -z "$app_dir" ]; then
-            echo "::error::Cannot find .app inside Payload"
-            exit 1
-          fi
-          echo "App directory: $app_dir"
-          mkdir -p "$app_dir/PlugIns"
-
-          # 复制原始 IPA 中的 PlugIns/*.appex（如果有）
-          find ipa_unpacked -type d -name '*.appex' -print0 | xargs -0 -I{} cp -R {} "$app_dir/PlugIns/" 2>/dev/null || true
-
-          # 把 workflow 工作区（我们克隆或复制到根目录的）*.appex 也复制进去，避免用 mv 覆盖源仓库
-          cp -R $GITHUB_WORKSPACE/*.appex "$app_dir/PlugIns/" 2>/dev/null || true
-
-          echo "=== PlugIns after merge ==="
-          ls -la "$app_dir/PlugIns" || true
-
-      - name: Repack merged IPA
-        run: |
-          # 重新打包 ipa（保持原始结构），生成 youtube_merged.ipa
-          rm -f youtube_merged.ipa
-          (cd ipa_unpacked && zip -qr ../youtube_merged.ipa .)
-          echo "youtube_merged.ipa size: $(stat -f%z youtube_merged.ipa || stat -c%s youtube_merged.ipa)"
-
-      - name: Inject .deb packages with cyan (using merged IPA)
-        run: |
-          # we will let cyan inject only .deb packages; PlugIns already merged into youtube_merged.ipa
-          tweaks=""
-          # include main downloaded ytplus.deb if present
-          if [ -f "ytplus.deb" ]; then tweaks="$tweaks ytplus.deb"; fi
-          # include any built .deb files
           for f in *.deb; do
-            if [ -f "$f" ] && [ "$f" != "ytplus.deb" ]; then tweaks="$tweaks $f"; fi
+            if [ -f "$f" ]; then
+              tweaks="$tweaks $f"
+            fi
           done
-          echo "DEBs to inject: $tweaks"
-          # run cyan using the merged IPA (so PlugIns we merged will be preserved)
-          cyan -i youtube_merged.ipa -o YouTubePlus_${{ inputs.tweak_version }}.ipa -uwef $tweaks -n "${{ inputs.display_name }}" -b ${{ inputs.bundle_id }}
 
-      - name: Verify resulting IPA PlugIns (debug)
-        run: |
-          mkdir -p tmp_check
-          unzip -q YouTubePlus_${{ inputs.tweak_version }}.ipa 'Payload/*/*.app/PlugIns/*' -d tmp_check || true
-          echo "=== Resulting PlugIns in final IPA ==="
-          find tmp_check -type d -name '*.appex' -print -exec ls -la {} \; || true
+          cyan -i youtube.ipa -o YouTubePlus_${{ inputs.tweak_version }}.ipa -uwef $tweaks -n "${{ inputs.display_name }}" -b ${{ inputs.bundle_id }}
 
       - name: Upload to GitHub Releases
         uses: softprops/action-gh-release@v2.0.1
